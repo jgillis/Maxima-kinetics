@@ -1,0 +1,211 @@
+errcatch(load(linearalgebra));
+load(linearalgebra);
+errcatch(load("/home/jg/tools/maxima/common.mac"));
+
+/*  matrices uit mech3, tekens anders dan in koen, koen */
+Rx(a) := matrix(
+ [1,0,0], 
+ [0,cos(a),-sin(a)], 
+ [0,sin(a),cos(a)]
+);
+
+Ry(a) := matrix(
+ [cos(a),0,sin(a)], 
+ [0,1,0], 
+ [-sin(a),0,cos(a)]
+);
+
+Rz(a) := matrix(
+ [cos(a),-sin(a),0], 
+ [sin(a),cos(a),0], 
+ [0,0,1]
+);
+
+zeros: zeromatrix;
+z3: zeromatrix(3,3);
+
+Trv(vec,alpha):=skew(vec).skew(vec)*(1-cos(alpha))+skew(vec)*sin(alpha)+ident(3); /* okay, wolfram is wrong */
+
+/* T_BA defines the pose of frame B with respect to frame A
+B is usually written upper right subscript
+A is usually written lower left subscript
+
+p_B is expressed in frame B coordinates
+
+p_A=T_BA.p_B is expressed in frame A coordinates
+
+Valid chain of tranformations is:
+
+T_CA=T_BA.T_CB
+
+Homogenous coordinates
+--
+[x,y,z,1] is a position vector.
+[dx,dy,dz,0] is a velocity vector (direction)
+
+Chain
+--
+a new frame C is constructed from frame A as follows:
+1) Rotate amount a over x-axis
+2) Rotate amount b over tranformed y-axis
+
+Introduce an intermediate frame B, ie the frame after step 1.
+T_CB=Ry(b);
+T_BA=Rx(a);
+
+T_CA=Rx(a).Ry(b);
+
+Hence, the same left-right order is preserved when chaining frames with moving axes.
+
+*/
+
+/*
+
+Matrix manipulation wrapup
+www.my-tool.com/mathematics/maximaphp/doc/maxima_57.html
+
+- ident
+- addcol
+- addrow
+- copymatrix
+- submatrix
+- zeromatrix
+- matrix_size
+- mat_unblocker
+- setelmx (x, i, j, M)  (M [i, j]: x lijkt niet te werken)
+- coefmatrix
+- col, row	Get column or row i
+- matrix_size	Get size of matrix
+- genmatrix	Generate matrix with formula
+*/
+/* Transforms a rotation matrix 3x3 R to a pose matrix 4x4 T*/
+R2T(R):=block([T:T],T:copymatrix(R),return(addrow(addcol(T,[0,0,0]),[0,0,0,1])));
+
+
+TRx(a):=R2T(Rx(a));TRy(a):=R2T(Ry(a));TRz(a):=R2T(Rz(a));
+
+/* Transforms a pose matrix 4x4 T to a rotation matrix 3x3 R*/
+T2R(T):=block([R:R],R:copymatrix(T),return(submatrix(4,R,4)));
+
+
+/* Rotate an amound theta over a vector vec. a.k.a. Rodriguez formula */
+Rv(vec,theta):=eye(3)+skew(vec)*sin(theta)+(1-cos(theta))*skew(vec).skew(vec);
+
+TRv(a):=R2T(Rv(a));
+
+/* Creates a translational pose matrix with displacement p*/
+tr(p):=matrix([1, 0, 0, p[1,1]],[0, 1, 0, p[2,1]],[0, 0, 1, p[3,1]],[0, 0, 0, 1]);
+
+/* Returns the translational part of a pose matrix */
+trp(M):=submatrix(4,M,1,2,3);
+
+/* Returns the inverse of a transformation matrix 4x4 / for the inverse of a 3x3 matrix, use transpose*/
+inv(T):=block([M:M,R:R],M:copymatrix(T),R:transpose(T2R(M)),return(addrow(addcol(R,-R.trp(M)),[0,0,0,1])));
+
+/* Create a 3-vector position vector from a 3-list */
+vec(l):= matrix([l[1]],[l[2]],[l[3]],[1]);
+
+/* Create a 3-vector velocity vector from a 3-list */
+vel(l):= matrix([l[1]],[l[2]],[l[3]],[0]);
+
+cart(l):=if matrix_size(l)[1]=4 then submatrix(4,l) else l;
+hom(l):=vel(m2l(l));
+
+/* Makes a skew symmetric matrix out of vec(w) */
+skew(w):=matrix([0,-w[3,1],w[2,1]],[w[3,1],0,-w[1,1]],[-w[2,1],w[1,1],0]);
+
+/* Makes a vec(w) out of a skew matrix */
+invskew(S):=matrix([S[3,2]],[S[1,3]],[S[2,1]],[0]);
+
+cross(a,b):=vel(m2l(skew(a).cart(b)));
+
+/* return skew omega of rotation matrix  (1.32)*/
+bw(R):=diff(R,t).transpose(R);
+
+/* Returns the derivative of p after manipulation with R (1.30) */
+derR(R,p):=bw(R).p;
+
+/* Returns the derivative of p after manipulation with T (1.30) */
+/* Input is T_BA and p_B, output is expressed in frame A*/
+
+derT(T,p):=diff(T,t).p;
+
+
+/* construct a screw transformation matrix S_BA
+ie the matrix that 
+*/
+ST(M):=block([T:T,R:R],T:copymatrix(M),R:T2R(T),mat_unblocker(matrix([R,z3],[skew(trp(T)).R,R])));
+
+/* contructs a pose twist transformation P_BA that changes the frame in which the twist is 
+expressed from B to A, given a T_BA matrix*/
+PT(T):=block([R:R],R:T2R(T),mat_unblocker(matrix([R,z3],[z3,R])));
+
+
+
+invST(S):=mat_unblocker(matrix([z3,ident(3)],[ident(3),z3])).S.mat_unblocker(matrix([z3,ident(3)],[ident(3),z3]));
+
+
+/* Creates a screw twist representation t_BA of a tranformation T_BA it has the form (omega,v0)
+v0 is the velocity of a particular point attached to frame B (ie the point that coincides with the origin of A)
+all expressed in frame A coordinates
+*/
+T2st(M):=block([T:T,S:S],T:copymatrix(M),S:diff(T,t).inv(T),return(matrix([S[3,2]],[S[1,3]],[S[2,1]],[S[1,4]],[S[2,4]],[S[3,4]])));
+
+
+/* Pose twist : (omega,v0) pair relative velocity expressed in inertial frame*/
+T2pt(M):=block([T:T,S:S,p:p],S:diff(M,t).inv(M),p:T2R(S).trp(M)+trp(S),return(matrix([S[3,2]],[S[1,3]],[S[2,1]],[p[1,1]],[p[2,1]],[p[3,1]])));
+
+/* get omega expressed in coordinates of the frame on which M is based */
+T2w(M):=invskew(diff(T2R(M),t).transpose(T2R(M)));
+
+/* get omega expressed in coordinates of the frame which M is defining */
+T2wb(M):=invskew(transpose(T2R(M)).diff(T2R(M),t));
+
+/* BT: body twist */
+T2bt(T):=trigsimp(trigsimp(PT(inv(T)).trigsimp(T2pt(T))));
+
+t2v(t):=matrix([t[4,1]],[t[5,1]],[t[6,1]],[0]);
+t2w(t):=matrix([t[1,1]],[t[2,1]],[t[3,1]],[0]);
+
+/* 2-norm of a vector */
+norm(V):=sqrt(V[1,1]^2+V[2,1]^2+V[3,1]^2);
+
+
+equate(V1,V2):=[V1[1,1]=V2[1,1],V1[2,1]=V2[2,1],V1[3,1]=V2[3,1]];
+
+equate(V1,V2):=map("=",m2l(V1),m2l(V2));
+
+
+diffsubs(elocal,xlocal,dxlocal,ddxlocal):=block([temp:temp],temp: elocal,ev(temp,append(map("=",diff(xlocal,t),dxlocal),map("=",diff(xlocal,t,2),ddxlocal))));
+
+/* Convert matrix to list */
+m2l(m) :=if matrix_size(m)[1]>1 then if matrix_size(m)[2]=1 then makelist(m[i,1],i,1,matrix_size(m)[1]) else flatten(makelist(makelist(m[i,j],i,1,matrix_size(m)[1]),j,1,matrix_size(m)[2])) else makelist(m[1,i],i,1,matrix_size(m)[2]);
+/* Convert list to matrix */
+l2m(l) :=genmatrix(lambda([a,b],l[a]),length(l),1);
+
+
+ifthen(e,t):=if e then t else 0;
+isdep(e,a):=member(a,listofvars(e));
+deppart(e,a):=if mapatom(e) then ifthen(isdep(e,a),e) else if op(e)="+" then map(lambda([y],ifthen(isdep(y,a),y)),e) else 0;
+
+immunolist(f,l):=map(lambda([q],f(q)=concat(f,x,q)),l);
+aimmunolist(f,l):=map(lambda([q],concat(f,x,q)=f(q)),l);
+trigcombine(expr,listvar):=block([antil:antil,tempv:tempv],antil:setdifference(setify(listofvars(expr)),setify(listvar)), tempv:ev(expr,listify(union(immunolist(sin,antil),immunolist(cos,antil)))),tempv:trigreduce(tempv),tempv:ev(tempv,listify(union(aimmunolist(sin,antil),aimmunolist(cos,antil)))));
+
+eye:ident;
+/* Inertia tensor for translated point mass. See bib:exercisesB */
+It(v,m):=m*(norm(v)^2*eye(3)-cart(v).transpose(cart(v)));
+
+listsum(arg):=lsum(dummy, dummy,arg);
+
+diag(x):=matrix([x[1],0,0],[0,x[2],0],[0,0,x[3]]);
+
+
+/*
+FA:
+
+define: expected a subscripted expression; found: errexp1
+when calling savex
+
+
+*/
